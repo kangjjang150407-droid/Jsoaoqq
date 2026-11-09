@@ -1251,6 +1251,7 @@ function buildForm(box, obj, schema, onChange) {
       inp.value = val;
     }
     row.appendChild(inp);
+    if (fd.rebuildOnChange) inp.addEventListener('change', () => { const st = box.closest('.inner').scrollTop; buildForm(box, obj, schema, onChange); box.closest('.inner').scrollTop = st; });
     if (fd.type === 'range') { out = document.createElement('output'); out.textContent = fd.fmt ? fd.fmt(+val, obj) : val; row.appendChild(out); }
     else row.classList.add('wide');
     const ev = (fd.type === 'select' || fd.type === 'check') ? 'change' : 'input';
@@ -1553,11 +1554,27 @@ $('#vfxPv').addEventListener('pointerdown', e => {
 // =====================================================================
 // 🤖 AI 생성 (키는 이 기기 localStorage에만 저장, 브라우저에서 직접 호출)
 // =====================================================================
-let aiCfg = { provider: 'auto', key: '', baseUrl: 'https://api.openai.com/v1', model: '' };
+const AI_DEFAULTS = {
+  openai: { name: 'OpenAI 호환', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  nvidia: { name: 'NVIDIA', base: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4.1-flash' },
+  anthropic: { name: 'Claude', base: 'https://api.anthropic.com/v1', model: 'claude-opus-5-5' },
+};
+let aiCfg = { provider: 'auto', key: '', baseUrl: '', model: '', proxy: '' };
 try { Object.assign(aiCfg, JSON.parse(localStorage.getItem('bf_ai') || '{}')); } catch (e) {}
+if (aiCfg.baseUrl === AI_DEFAULTS.openai.base) aiCfg.baseUrl = '';   // 예전 기본값 정리
 const saveAi = () => { try { localStorage.setItem('bf_ai', JSON.stringify(aiCfg)); } catch (e) {} };
-const aiProvider = () => aiCfg.provider !== 'auto' ? aiCfg.provider : (aiCfg.key.trim().startsWith('sk-ant-') ? 'anthropic' : 'openai');
-const aiModel = () => (aiCfg.model || '').trim() || (aiProvider() === 'anthropic' ? 'claude-opus-5-5' : 'gpt-4o-mini');
+const aiProvider = () => {
+  if (aiCfg.provider !== 'auto') return aiCfg.provider;
+  const k = aiCfg.key.trim();
+  return k.startsWith('sk-ant-') ? 'anthropic' : k.startsWith('nvapi-') ? 'nvidia' : 'openai';
+};
+const aiModel = () => (aiCfg.model || '').trim() || AI_DEFAULTS[aiProvider()].model;
+// NVIDIA는 브라우저 직접 호출(CORS)을 막아서 중계 서버(proxy) 주소가 있으면 그쪽으로 보냄
+const aiBase = () => {
+  const pv = aiProvider();
+  if (pv === 'nvidia' && (aiCfg.proxy || '').trim()) return aiCfg.proxy.trim().replace(/\/+$/, '') + '/v1';
+  return ((aiCfg.baseUrl || '').trim() || AI_DEFAULTS[pv].base).replace(/\/+$/, '');
+};
 const CLAUDE_FALLBACK_MODELS = ['claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5-5'];
 
 async function callAI(system, user) {
@@ -1575,8 +1592,8 @@ async function callAI(system, user) {
       if (j.stop_reason === 'refusal') throw new Error('AI가 이 요청을 거절했어요. 표현을 바꿔서 다시 시도해 보세요.');
       return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
     }
-    const url = (aiCfg.baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '') + '/chat/completions';
-    const body = { model: aiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], response_format: { type: 'json_object' } };
+    const url = aiBase() + '/chat/completions';
+    const body = { model: aiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], response_format: { type: 'json_object' }, max_tokens: 4096, temperature: 0.8 };
     const send = () => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
     r = await send();
     if (r.status === 400) { delete body.response_format; r = await send(); }   // JSON 모드 미지원 서버 대비
@@ -1584,11 +1601,16 @@ async function callAI(system, user) {
     if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
     return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
   } catch (e) {
-    if (e instanceof TypeError) throw new Error('AI 서버에 연결할 수 없어요 (인터넷 / API 주소 / 키 종류를 확인하세요).\n' + e.message);
+    if (e instanceof TypeError) {
+      if (aiProvider() === 'nvidia' && !(aiCfg.proxy || '').trim())
+        throw new Error('NVIDIA API는 브라우저에서 바로 호출할 수 없어요 (보안 정책 CORS).\n[🤖 AI 설정 → 중계 서버 주소]에 중계 서버를 넣어주세요.\n만드는 방법: 저장소의 proxy/README.md 참고 (무료, 5분).');
+      throw new Error('AI 서버에 연결할 수 없어요 (인터넷 / API 주소 / 중계 서버 / 키 종류를 확인하세요).\n' + e.message);
+    }
     throw e;
   }
 }
 function parseJSON(t) {
+  t = String(t).replace(/<think>[\s\S]*?<\/think>/gi, '');
   const a = t.indexOf('{'), b = t.lastIndexOf('}');
   if (a < 0 || b < a) throw new Error('AI 응답에서 JSON을 찾지 못했어요. 다시 시도해 주세요.');
   return JSON.parse(t.slice(a, b + 1));
@@ -1669,11 +1691,14 @@ async function aiRun(btn, fn) {
   finally { btn.disabled = false; btn.textContent = label; }
 }
 const AI_SCHEMA = [
-  { key: 'provider', label: 'AI 종류', type: 'select', rebuild: true, options: [['auto', '자동 (키 모양으로 판단)'], ['openai', 'OpenAI 호환'], ['anthropic', 'Claude (Anthropic)']] },
-  { key: 'key', label: 'API 키', type: 'password', max: 300, ph: 'sk-...' },
-  { key: 'baseUrl', label: 'API 주소', type: 'text', max: 200, show: () => aiProvider() === 'openai' },
+  { key: 'provider', label: 'AI 종류', type: 'select', rebuild: true, options: [['auto', '자동 (키 모양으로 판단)'], ['openai', 'OpenAI 호환'], ['nvidia', 'NVIDIA (nvapi-)'], ['anthropic', 'Claude (Anthropic)']] },
+  { key: 'key', label: 'API 키', type: 'password', max: 300, ph: 'sk-... / nvapi-...', rebuildOnChange: true },
+  { key: 'proxy', label: '중계 서버 주소', type: 'text', max: 200, ph: 'https://xxx.workers.dev', show: () => aiProvider() === 'nvidia' },
+  { key: 'baseUrl', label: 'API 주소', type: 'text', max: 200, ph: AI_DEFAULTS.openai.base, show: () => aiProvider() === 'openai' },
   { key: 'model', label: '모델', type: 'text', max: 80, ph: '비우면 기본 모델' },
-  { type: 'hint', text: () => `→ ${aiProvider() === 'anthropic' ? 'Claude' : 'OpenAI 호환'} · 모델 ${aiModel()}${aiCfg.key.trim() ? ' · 키 입력됨 ✅' : ' · 키 없음'}\n키는 이 기기 브라우저에만 저장되고 AI 서버로만 전송돼요. 키를 남에게 공유하지 마세요.` },
+  { type: 'hint', text: () => `→ ${AI_DEFAULTS[aiProvider()].name} · 모델 ${aiModel()}${aiCfg.key.trim() ? ' · 키 입력됨 ✅' : ' · 키 없음'}` +
+      (aiProvider() === 'nvidia' ? `\n⚠️ NVIDIA는 브라우저 직접 호출이 막혀 있어 중계 서버가 필요해요 ${(aiCfg.proxy || '').trim() ? '(설정됨 ✅)' : '(미설정)'}\n추천 모델: deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6, nvidia/nemotron-3-super-120b-a12b` : '') +
+      '\n키는 이 기기 브라우저에만 저장되고 AI 서버로만 전송돼요. 키를 남에게 공유하지 마세요.' },
 ];
 buildForm($('#aiSettings'), aiCfg, AI_SCHEMA, saveAi);
 
