@@ -180,6 +180,42 @@ function shade(hex, amt) {
   const f = v => clamp(Math.round(amt < 0 ? v * (1 + amt) : v + (255 - v) * amt), 0, 255);
   return `rgb(${f(r)},${f(g)},${f(b)})`;
 }
+// ----- 프로필 이미지 -----
+const imgCache = new Map();
+function getImg(src) {
+  if (!src) return null;
+  let im = imgCache.get(src);
+  if (!im) { im = new Image(); im.src = src; imgCache.set(src, im); }
+  return im.complete && im.naturalWidth ? im : null;
+}
+// 원 안에 이미지 그리기 (zoom: 확대, ox/oy: -1~1 위치 이동)
+function drawFace(c, d, x, y, r) {
+  const im = getImg(d.image); if (!im) return false;
+  const z = d.imgZoom || 1, s = 2 * r * z, m = (s - 2 * r) / 2;
+  c.save(); c.beginPath(); c.arc(x, y, r, 0, TAU); c.clip();
+  c.fillStyle = '#000'; c.fillRect(x - r, y - r, 2 * r, 2 * r);
+  c.drawImage(im, x - s / 2 - (d.imgX || 0) * m, y - s / 2 - (d.imgY || 0) * m, s, s);
+  c.restore();
+  return true;
+}
+// 업로드한 사진 → 정사각형으로 잘라 축소한 dataURL
+function loadProfileImage(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const N = 240, cvs = document.createElement('canvas'); cvs.width = cvs.height = N;
+      const k = Math.min(im.naturalWidth, im.naturalHeight), sx = (im.naturalWidth - k) / 2, sy = (im.naturalHeight - k) / 2;
+      const g = cvs.getContext('2d'); g.drawImage(im, sx, sy, k, k, 0, 0, N, N);
+      URL.revokeObjectURL(url);
+      let out = cvs.toDataURL('image/webp', 0.85);
+      if (!out.startsWith('data:image/webp')) out = cvs.toDataURL('image/png');
+      if (out.length > 150000) out = cvs.toDataURL('image/jpeg', 0.85);
+      res(out);
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('이미지를 열 수 없어요')); };
+    im.src = url;
+  });
+}
 function rrect(c, x, y, w, h, r) {
   c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
   c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
@@ -246,6 +282,7 @@ function charTemplate() {
     novaRadius: 170, knockback: 7, armor: 0, resist: 0,
     growStat: 'damage', growAmount: 1,
     hitVfx: '', castVfx: '', trailVfx: '', deathVfx: '',
+    image: '', imgZoom: 1, imgX: 0, imgY: 0, hpShow: 'center',
     talkChance: 30, lines: { start: '', hit: '', hurt: '', win: '', death: '' },
   };
 }
@@ -823,15 +860,29 @@ class Engine {
       });
       c.globalAlpha = 1;
     }
-    const g = c.createRadialGradient(f.x - f.r * 0.35, f.y - f.r * 0.4, f.r * 0.1, f.x, f.y, f.r);
-    g.addColorStop(0, '#ffffff'); g.addColorStop(0.25, f.color); g.addColorStop(1, shade(f.color, -0.35));
-    c.fillStyle = g; c.beginPath(); c.arc(f.x, f.y, f.r, 0, TAU); c.fill();
+    const hasImg = drawFace(c, f.def, f.x, f.y, f.r);
+    if (!hasImg) {
+      const g = c.createRadialGradient(f.x - f.r * 0.35, f.y - f.r * 0.4, f.r * 0.1, f.x, f.y, f.r);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.25, f.color); g.addColorStop(1, shade(f.color, -0.35));
+      c.fillStyle = g; c.beginPath(); c.arc(f.x, f.y, f.r, 0, TAU); c.fill();
+    }
     if (f.flash > 0) { c.globalAlpha = clamp(f.flash / 8, 0, 1) * 0.85; c.fillStyle = '#fff'; c.beginPath(); c.arc(f.x, f.y, f.r, 0, TAU); c.fill(); c.globalAlpha = 1; }
-    c.strokeStyle = 'rgba(0,0,0,.45)'; c.lineWidth = 3; c.beginPath(); c.arc(f.x, f.y, f.r, 0, TAU); c.stroke();
-    font(c, Math.round(clamp(f.r * 0.68, 14, 44))); c.textAlign = 'center'; c.textBaseline = 'middle';
-    const txt = f.def.id === '_dummy' ? '🎯' : String(Math.ceil(f.hp));
-    c.lineWidth = 5; c.strokeStyle = 'rgba(0,0,0,.7)'; c.strokeText(txt, f.x, f.y + 1);
-    c.fillStyle = '#fff'; c.fillText(txt, f.x, f.y + 1);
+    if (hasImg) { c.strokeStyle = f.color; c.lineWidth = 5; c.beginPath(); c.arc(f.x, f.y, f.r - 1.5, 0, TAU); c.stroke(); }
+    c.strokeStyle = 'rgba(0,0,0,.45)'; c.lineWidth = 2; c.beginPath(); c.arc(f.x, f.y, f.r + (hasImg ? 1 : 0), 0, TAU); c.stroke();
+    const isDummy = f.def.id === '_dummy', show = isDummy ? 'center' : (f.def.hpShow || 'center');
+    if (show === 'none' || (isDummy && hasImg)) return;
+    const txt = isDummy ? '🎯' : String(Math.ceil(f.hp));
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    if (show === 'below') {
+      font(c, Math.round(clamp(f.r * 0.42, 14, 30)));
+      const w = c.measureText(txt).width + 16, h = Math.round(clamp(f.r * 0.42, 14, 30)) + 8, y = f.y + f.r + 4 + h / 2;
+      c.fillStyle = 'rgba(0,0,0,.65)'; rrect(c, f.x - w / 2, y - h / 2, w, h, h / 2); c.fill();
+      c.fillStyle = f.color; c.fillText(txt, f.x, y + 1);
+    } else {
+      font(c, Math.round(clamp(f.r * 0.68, 14, 44)));
+      c.lineWidth = hasImg ? 7 : 5; c.strokeStyle = 'rgba(0,0,0,.75)'; c.strokeText(txt, f.x, f.y + 1);
+      c.fillStyle = '#fff'; c.fillText(txt, f.x, f.y + 1);
+    }
   }
   drawBubble(c, b) {
     font(c, 24, 800);
@@ -922,7 +973,8 @@ function drawStats(e) {
   fs.forEach((f, i) => {
     const y = top + i * rh, fz = Math.min(28, rh * 0.4);
     ctx.globalAlpha = f.dead ? 0.35 : 1;
-    ctx.fillStyle = f.color; ctx.beginPath(); ctx.arc(52, y + rh * 0.38, 13, 0, TAU); ctx.fill();
+    if (drawFace(ctx, f.def, 52, y + rh * 0.38, 17)) { ctx.strokeStyle = f.color; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(52, y + rh * 0.38, 17, 0, TAU); ctx.stroke(); }
+    else { ctx.fillStyle = f.color; ctx.beginPath(); ctx.arc(52, y + rh * 0.38, 13, 0, TAU); ctx.fill(); }
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     font(ctx, fz); ctx.fillStyle = '#fff'; ctx.fillText(f.name, 78, y + rh * 0.38);
     const nw = ctx.measureText(f.name).width;
@@ -1104,6 +1156,29 @@ function buildForm(box, obj, schema, onChange) {
     const row = document.createElement('label'); row.className = 'frow';
     const lab = document.createElement('span'); lab.textContent = typeof fd.label === 'function' ? fd.label(obj) : fd.label; row.appendChild(lab);
     let inp, out = null; const val = getP(obj, fd.key);
+    if (fd.type === 'image') {
+      inp = document.createElement('div'); inp.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const th = document.createElement('span');
+      th.style.cssText = `width:56px;height:56px;flex:none;border-radius:50%;border:3px solid ${obj.color};background:${obj.color} center/cover`;
+      if (val) th.style.backgroundImage = `url("${val}")`;
+      const file = document.createElement('input'); file.type = 'file'; file.accept = 'image/*'; file.hidden = true;
+      const pick = document.createElement('button'); pick.type = 'button'; pick.className = 'small'; pick.textContent = val ? '📷 변경' : '📷 사진 선택';
+      pick.onclick = e => { e.preventDefault(); file.click(); };
+      file.onchange = async () => {
+        const fl = file.files[0]; if (!fl) return;
+        try { setP(obj, fd.key, await loadProfileImage(fl)); obj.imgZoom = 1; obj.imgX = 0; obj.imgY = 0; if ('hpShow' in obj) obj.hpShow = 'below'; }
+        catch (err) { alert(err.message); return; }
+        const st = box.closest('.inner').scrollTop; buildForm(box, obj, schema, onChange); box.closest('.inner').scrollTop = st; onChange(fd);
+      };
+      inp.append(th, pick, file);
+      if (val) {
+        const del = document.createElement('button'); del.type = 'button'; del.className = 'small danger'; del.textContent = '삭제';
+        del.onclick = e => { e.preventDefault(); setP(obj, fd.key, ''); const st = box.closest('.inner').scrollTop; buildForm(box, obj, schema, onChange); box.closest('.inner').scrollTop = st; onChange(fd); };
+        inp.append(del);
+      }
+      row.appendChild(inp); row.classList.add('wide'); box.appendChild(row);
+      continue;
+    }
     if (fd.type === 'select') {
       inp = document.createElement('select');
       const opts = typeof fd.options === 'function' ? fd.options(obj) : fd.options;
@@ -1142,7 +1217,12 @@ const vfxOptions = () => [['', '기본'], ['none', '없음'], ...vfxs.map(v => [
 const CHAR_SCHEMA = [
   { section: '기본' },
   { key: 'name', label: '이름', type: 'text', max: 12 },
-  { key: 'color', label: '몸 색', type: 'color' },
+  { key: 'color', label: '몸 / 테두리 색', type: 'color' },
+  { key: 'image', label: '프로필 이미지', type: 'image' },
+  { key: 'imgZoom', label: '이미지 확대', type: 'range', min: 1, max: 3, step: 0.05, fmt: v => 'x' + v.toFixed(2), show: c => !!c.image },
+  { key: 'imgX', label: '좌우 위치', type: 'range', min: -1, max: 1, step: 0.05, show: c => !!c.image },
+  { key: 'imgY', label: '상하 위치', type: 'range', min: -1, max: 1, step: 0.05, show: c => !!c.image },
+  { key: 'hpShow', label: '체력 표시', type: 'select', options: [['center', '볼 가운데'], ['below', '볼 아래'], ['none', '숨김']] },
   { key: 'hp', label: '체력', type: 'range', min: 10, max: 500, step: 10 },
   { key: 'radius', label: '크기', type: 'range', min: 20, max: 90 },
   { key: 'speed', label: '이동 속도', type: 'range', min: 1, max: 20, step: 0.5 },
@@ -1243,7 +1323,8 @@ function renderSlots() {
   config.slots.forEach((id, i) => {
     const row = document.createElement('div'); row.className = 'slot';
     const c = chars.find(x => x.id === id);
-    const dot = document.createElement('span'); dot.style.cssText = `width:16px;height:16px;flex:none;border-radius:50%;background:${c.color}`;
+    const dot = document.createElement('span'); dot.style.cssText = `width:30px;height:30px;flex:none;border-radius:50%;border:3px solid ${c.color};background:${c.color} center/cover`;
+    if (c.image) dot.style.backgroundImage = `url("${c.image}")`;
     const sel = document.createElement('select');
     chars.forEach(ch => { const o = document.createElement('option'); o.value = ch.id; o.textContent = `${ch.attackType === 'magic' ? '✦' : '⚔'} ${ch.name}`; if (ch.id === id) o.selected = true; sel.appendChild(o); });
     sel.onchange = () => { config.slots[i] = sel.value; renderSlots(); };
@@ -1335,8 +1416,9 @@ function renderCharList() {
   for (const c of chars) {
     const it = document.createElement('div'); it.className = 'item';
     const g = GROW[c.growStat];
-    it.innerHTML = `<span class="dot" style="background:${c.color}"></span>
+    it.innerHTML = `<span class="dot" style="background:${c.color} center/cover;border-color:${c.color}"></span>
       <div class="nm"><b></b><small>${STYLE_NAME[c.style] || ''} · 체력 ${c.hp} · 피해 ${c.damage}${c.growStat !== 'none' ? ' · 성장: ' + g.label : ''}</small></div>`;
+    if (c.image) it.querySelector('.dot').style.backgroundImage = `url("${c.image}")`;
     it.querySelector('b').textContent = c.name;
     it.querySelector('b').insertAdjacentHTML('beforeend', c.attackType === 'magic' ? '<span class="tag m">✦마법</span>' : '<span class="tag p">⚔물리</span>');
     const mk = (t, fn, cls) => { const b = document.createElement('button'); b.className = 'small ' + (cls || ''); b.textContent = t; b.onclick = fn; it.appendChild(b); };
