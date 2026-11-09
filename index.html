@@ -114,6 +114,8 @@
       </div>
       <h3>🤖 AI 설정</h3>
       <div id="aiSettings"></div>
+      <div class="row"><button id="aiTestBtn" class="ai">🔌 AI 연결 테스트</button></div>
+      <pre id="aiTestOut" class="hint" style="white-space:pre-wrap;word-break:break-all;margin:0;font-family:inherit" hidden></pre>
       <h3>💾 데이터 (캐릭터 · VFX)</h3>
       <div class="row">
         <button id="exportBtn">📤 내보내기</button>
@@ -1570,9 +1572,16 @@ const aiProvider = () => {
 };
 const aiModel = () => (aiCfg.model || '').trim() || AI_DEFAULTS[aiProvider()].model;
 // NVIDIA는 브라우저 직접 호출(CORS)을 막아서 중계 서버(proxy) 주소가 있으면 그쪽으로 보냄
+// 중계 서버 주소 정리: 공백, 끝의 / 와 /v1 , 잘못 붙은 경로 제거
+const proxyRoot = () => {
+  let u = (aiCfg.proxy || '').trim().replace(/\s+/g, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  try { return new URL(u).origin; } catch (e) { return u.replace(/\/+$/, ''); }
+};
 const aiBase = () => {
   const pv = aiProvider();
-  if (pv === 'nvidia' && (aiCfg.proxy || '').trim()) return aiCfg.proxy.trim().replace(/\/+$/, '') + '/v1';
+  if (pv === 'nvidia' && proxyRoot()) return proxyRoot() + '/v1';
   return ((aiCfg.baseUrl || '').trim() || AI_DEFAULTS[pv].base).replace(/\/+$/, '');
 };
 const CLAUDE_FALLBACK_MODELS = ['claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5-5'];
@@ -1588,9 +1597,11 @@ async function callAI(system, user) {
       if (CLAUDE_FALLBACK_MODELS.includes(model)) { headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; body.fallbacks = 'default'; }
       r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
       j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
+      if (!r.ok) throw new Error(apiErr(r, j));
       if (j.stop_reason === 'refusal') throw new Error('AI가 이 요청을 거절했어요. 표현을 바꿔서 다시 시도해 보세요.');
-      return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+      const txt = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+      if (!txt.trim()) throw new Error('AI 응답이 비어 있어요 (모델/주소를 확인하세요)');
+      return txt;
     }
     const url = aiBase() + '/chat/completions';
     const body = { model: aiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], response_format: { type: 'json_object' }, max_tokens: 4096, temperature: 0.8 };
@@ -1598,8 +1609,10 @@ async function callAI(system, user) {
     r = await send();
     if (r.status === 400) { delete body.response_format; r = await send(); }   // JSON 모드 미지원 서버 대비
     j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
-    return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+    if (!r.ok) throw new Error(apiErr(r, j));
+    const txt = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+    if (!txt.trim()) throw new Error('AI 응답이 비어 있어요 (주소가 AI 서버가 아니거나 모델이 응답하지 않음)');
+    return txt;
   } catch (e) {
     if (e instanceof TypeError) {
       if (aiProvider() === 'nvidia' && !(aiCfg.proxy || '').trim())
@@ -1608,6 +1621,47 @@ async function callAI(system, user) {
     }
     throw e;
   }
+}
+function apiErr(r, j) {
+  const m = (j && ((j.error && (j.error.message || j.error)) || j.detail || j.title || j.message)) || '';
+  const hint = r.status === 401 || r.status === 403 ? ' → API 키를 확인하세요' : r.status === 404 ? ' → 모델 이름이나 주소를 확인하세요' : r.status === 429 ? ' → 사용량 한도 초과, 잠시 후 다시' : '';
+  return `HTTP ${r.status} ${typeof m === 'string' ? m : JSON.stringify(m)}${hint}`;
+}
+async function aiTest() {
+  const out = $('#aiTestOut'), lines = [];
+  const show = () => { out.hidden = false; out.textContent = lines.join('\n'); };
+  const pv = aiProvider();
+  lines.push(`종류: ${AI_DEFAULTS[pv].name} · 모델: ${aiModel()}`, `요청 주소: ${aiBase()}${pv === 'anthropic' ? '/messages' : '/chat/completions'}`);
+  if (!aiCfg.key.trim()) { lines.push('❌ API 키가 비어 있어요'); return show(); }
+  if (pv === 'nvidia') {
+    const root = proxyRoot();
+    if (!root) { lines.push('❌ 중계 서버 주소가 비어 있어요'); return show(); }
+    lines.push('⏳ 중계 서버 확인 중…'); show();
+    try {
+      const t = await (await fetch(root + '/')).text();
+      lines[lines.length - 1] = t.includes('ballfight-proxy-ok') ? '✅ 중계 서버 연결됨 (코드 정상)' : '⚠️ 중계 서버는 응답했지만 코드가 달라요 → 최신 코드로 다시 붙여넣고 Deploy';
+    } catch (e) {
+      lines[lines.length - 1] = '❌ 중계 서버에 연결할 수 없어요. 가능한 원인:\n' +
+        ' · Cloudflare에서 Hello World 코드를 지우지 않고 그대로 Deploy함\n' +
+        ' · 코드를 붙여넣은 뒤 오른쪽 위 Deploy를 안 누름\n' +
+        ' · 주소 오타 (…workers.dev 까지만 넣으면 돼요)\n' +
+        ' · 예전 버전 코드 사용 중 → 최신 코드로 다시 붙여넣기';
+      return show();
+    }
+    show();
+    try {
+      const r = await fetch(root + '/v1/models');
+      if (r.ok) { const ids = ((await r.json()).data || []).map(m => m.id); lines.push(ids.includes(aiModel()) ? '✅ 모델 이름 확인됨' : `⚠️ "${aiModel()}" 모델이 NVIDIA 목록에 없어요. 모델 칸을 비우거나 목록에 있는 이름으로 바꾸세요.`); }
+      else lines.push('⚠️ 모델 목록 확인 실패: HTTP ' + r.status);
+    } catch (e) { lines.push('⚠️ 모델 목록 확인 실패'); }
+    show();
+  }
+  lines.push('⏳ AI에게 테스트 요청 중…'); show();
+  try {
+    const t = await callAI('JSON 객체 하나만 출력해.', '{"ok": true} 를 그대로 출력해');
+    lines[lines.length - 1] = '✅ AI 응답 성공! → ' + t.replace(/\s+/g, ' ').slice(0, 80);
+  } catch (e) { lines[lines.length - 1] = '❌ AI 호출 실패: ' + e.message; }
+  show();
 }
 function parseJSON(t) {
   t = String(t).replace(/<think>[\s\S]*?<\/think>/gi, '');
@@ -1701,6 +1755,7 @@ const AI_SCHEMA = [
       '\n키는 이 기기 브라우저에만 저장되고 AI 서버로만 전송돼요. 키를 남에게 공유하지 마세요.' },
 ];
 buildForm($('#aiSettings'), aiCfg, AI_SCHEMA, saveAi);
+$('#aiTestBtn').onclick = e => aiRun(e.currentTarget, aiTest);
 
 $('#aiVfxBtn').onclick = e => aiRun(e.currentTarget, async () => {
   const v = await aiMakeVfx($('#aiVfxPrompt').value);
