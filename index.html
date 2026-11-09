@@ -35,7 +35,7 @@
   button:disabled { opacity: .4; }
   button.primary, .btn.primary { background: linear-gradient(135deg, #ff5252, #ff9800); width: 100%; font-size: 18px; padding: 14px; }
   button.danger { background: #5a2330; }
-  button.small { padding: 6px 10px; font-size: 13px; }
+  button.small, .btn.small { padding: 6px 10px; font-size: 13px; }
   .row { display: flex; gap: 8px; margin: 10px 0; }
   .row > * { flex: 1; }
   .tabs { display: flex; gap: 6px; margin: 0 44px 14px 0; }
@@ -51,6 +51,10 @@
   .hint { color: #8a90a8; font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; white-space: pre-line; }
   .item { display: flex; align-items: center; gap: 10px; background: #1d2240; border-radius: 12px; padding: 10px; margin-bottom: 8px; }
   .item .dot { width: 22px; height: 22px; border-radius: 50%; flex: none; border: 2px solid rgba(255,255,255,.3); }
+  .filepick { position: relative; overflow: hidden; display: inline-block; cursor: pointer; }
+  .filepick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
+  .avatar { position: relative; flex: none; border-radius: 50%; border: 3px solid; background-position: center; background-size: cover; }
+  .avatar .cam { position: absolute; right: -4px; bottom: -4px; background: #3d4aa0; border-radius: 50%; font-size: 11px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
   .item .nm { flex: 1; min-width: 0; }
   .item .nm b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item .nm small { color: #8a90a8; }
@@ -238,6 +242,38 @@ function loadProfileImage(file) {
     im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('이미지를 열 수 없어요')); };
     im.src = url;
   });
+}
+// 이모지/글자 → 프로필 이미지
+function makeEmojiImage(text, color) {
+  const N = 240, cvs = document.createElement('canvas'); cvs.width = cvs.height = N;
+  const g = cvs.getContext('2d'), gr = g.createRadialGradient(N * 0.35, N * 0.3, 10, N / 2, N / 2, N * 0.7);
+  gr.addColorStop(0, shade(color, 0.5)); gr.addColorStop(1, shade(color, -0.3));
+  g.fillStyle = gr; g.fillRect(0, 0, N, N);
+  const t = [...text].slice(0, 3).join('');
+  let size = 150; g.font = `900 ${size}px ${FONT}`;
+  while (size > 40 && g.measureText(t).width > N * 0.8) { size -= 10; g.font = `900 ${size}px ${FONT}`; }
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff';
+  g.lineWidth = size / 12; g.strokeStyle = 'rgba(0,0,0,.35)'; g.strokeText(t, N / 2, N / 2 + size * 0.05); g.fillText(t, N / 2, N / 2 + size * 0.05);
+  return cvs.toDataURL('image/png');
+}
+// 아이폰에서도 확실히 열리도록: 투명한 file input을 덮은 <label> 버튼
+function filePicker(el, onFile) {
+  el.classList.add('filepick');
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; inp.value = '';
+    if (!f) return;
+    try { await onFile(await loadProfileImage(f)); } catch (e) { alert('사진을 불러올 수 없어요: ' + e.message); }
+  };
+  el.appendChild(inp);
+  return el;
+}
+function avatarEl(c, size) {
+  const a = document.createElement('label'); a.className = 'avatar';
+  a.style.cssText = `width:${size}px;height:${size}px;border-color:${c.color};background-color:${c.color}`;
+  if (c.image) a.style.backgroundImage = `url("${c.image}")`;
+  const cam = document.createElement('span'); cam.className = 'cam'; cam.textContent = '📷'; a.appendChild(cam);
+  return a;
 }
 function rrect(c, x, y, w, h, r) {
   c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
@@ -1176,27 +1212,24 @@ function buildForm(box, obj, schema, onChange) {
     if (fd.show && !fd.show(obj)) continue;
     if (fd.section) { const h = document.createElement('h3'); h.textContent = fd.section; box.appendChild(h); continue; }
     if (fd.type === 'hint') { const p = document.createElement('p'); p.className = 'hint'; box.appendChild(p); hints.push([p, fd.text]); continue; }
-    const row = document.createElement('label'); row.className = 'frow';
+    const row = document.createElement(fd.type === 'image' ? 'div' : 'label'); row.className = 'frow';
     const lab = document.createElement('span'); lab.textContent = typeof fd.label === 'function' ? fd.label(obj) : fd.label; row.appendChild(lab);
     let inp, out = null; const val = getP(obj, fd.key);
     if (fd.type === 'image') {
-      inp = document.createElement('div'); inp.style.cssText = 'display:flex;gap:8px;align-items:center';
-      const th = document.createElement('span');
-      th.style.cssText = `width:56px;height:56px;flex:none;border-radius:50%;border:3px solid ${obj.color};background:${obj.color} center/cover`;
-      if (val) th.style.backgroundImage = `url("${val}")`;
-      const file = document.createElement('input'); file.type = 'file'; file.accept = 'image/*'; file.hidden = true;
-      const pick = document.createElement('button'); pick.type = 'button'; pick.className = 'small'; pick.textContent = val ? '📷 변경' : '📷 사진 선택';
-      pick.onclick = e => { e.preventDefault(); file.click(); };
-      file.onchange = async () => {
-        const fl = file.files[0]; if (!fl) return;
-        try { setP(obj, fd.key, await loadProfileImage(fl)); obj.imgZoom = 1; obj.imgX = 0; obj.imgY = 0; if ('hpShow' in obj) obj.hpShow = 'below'; }
-        catch (err) { alert(err.message); return; }
+      const apply = url => {
+        setP(obj, fd.key, url); obj.imgZoom = 1; obj.imgX = 0; obj.imgY = 0;
+        if (url && 'hpShow' in obj) obj.hpShow = 'below';
         const st = box.closest('.inner').scrollTop; buildForm(box, obj, schema, onChange); box.closest('.inner').scrollTop = st; onChange(fd);
       };
-      inp.append(th, pick, file);
+      inp = document.createElement('div'); inp.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+      const av = filePicker(avatarEl(obj, 64), apply);
+      const pick = filePicker(Object.assign(document.createElement('label'), { className: 'btn small', textContent: val ? '📷 사진 변경' : '📷 사진 선택' }), apply);
+      const emo = document.createElement('button'); emo.type = 'button'; emo.className = 'small'; emo.textContent = '😀 이모지';
+      emo.onclick = e => { e.preventDefault(); const t = prompt('볼에 넣을 이모지나 글자 (1~3자)', '🔥'); if (t && t.trim()) apply(makeEmojiImage(t.trim(), obj.color)); };
+      inp.append(av, pick, emo);
       if (val) {
         const del = document.createElement('button'); del.type = 'button'; del.className = 'small danger'; del.textContent = '삭제';
-        del.onclick = e => { e.preventDefault(); setP(obj, fd.key, ''); const st = box.closest('.inner').scrollTop; buildForm(box, obj, schema, onChange); box.closest('.inner').scrollTop = st; onChange(fd); };
+        del.onclick = e => { e.preventDefault(); apply(''); if ('hpShow' in obj) obj.hpShow = 'center'; };
         inp.append(del);
       }
       row.appendChild(inp); row.classList.add('wide'); box.appendChild(row);
@@ -1239,9 +1272,9 @@ const isStyle = (...s) => c => s.includes(c.style);
 const vfxOptions = () => [['', '기본'], ['none', '없음'], ...vfxs.map(v => [v.id, '✨ ' + v.name])];
 const CHAR_SCHEMA = [
   { section: '기본' },
+  { key: 'image', label: '프로필 이미지', type: 'image' },
   { key: 'name', label: '이름', type: 'text', max: 12 },
   { key: 'color', label: '몸 / 테두리 색', type: 'color' },
-  { key: 'image', label: '프로필 이미지', type: 'image' },
   { key: 'imgZoom', label: '이미지 확대', type: 'range', min: 1, max: 3, step: 0.05, fmt: v => 'x' + v.toFixed(2), show: c => !!c.image },
   { key: 'imgX', label: '좌우 위치', type: 'range', min: -1, max: 1, step: 0.05, show: c => !!c.image },
   { key: 'imgY', label: '상하 위치', type: 'range', min: -1, max: 1, step: 0.05, show: c => !!c.image },
@@ -1439,9 +1472,8 @@ function renderCharList() {
   for (const c of chars) {
     const it = document.createElement('div'); it.className = 'item';
     const g = GROW[c.growStat];
-    it.innerHTML = `<span class="dot" style="background:${c.color} center/cover;border-color:${c.color}"></span>
-      <div class="nm"><b></b><small>${STYLE_NAME[c.style] || ''} · 체력 ${c.hp} · 피해 ${c.damage}${c.growStat !== 'none' ? ' · 성장: ' + g.label : ''}</small></div>`;
-    if (c.image) it.querySelector('.dot').style.backgroundImage = `url("${c.image}")`;
+    it.innerHTML = `<div class="nm"><b></b><small>${STYLE_NAME[c.style] || ''} · 체력 ${c.hp} · 피해 ${c.damage}${c.growStat !== 'none' ? ' · 성장: ' + g.label : ''}</small></div>`;
+    it.prepend(filePicker(avatarEl(c, 44), url => { c.image = url; c.imgZoom = 1; c.imgX = 0; c.imgY = 0; c.hpShow = 'below'; saveStore(); renderCharList(); idlePreview(); }));
     it.querySelector('b').textContent = c.name;
     it.querySelector('b').insertAdjacentHTML('beforeend', c.attackType === 'magic' ? '<span class="tag m">✦마법</span>' : '<span class="tag p">⚔물리</span>');
     const mk = (t, fn, cls) => { const b = document.createElement('button'); b.className = 'small ' + (cls || ''); b.textContent = t; b.onclick = fn; it.appendChild(b); };
