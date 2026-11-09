@@ -48,7 +48,7 @@
   .frow > span:first-child { color: #aab; }
   .frow.wide { grid-template-columns: 96px 1fr; }
   .frow output { text-align: right; font-variant-numeric: tabular-nums; color: #ddd; font-size: 13px; }
-  .hint { color: #8a90a8; font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; }
+  .hint { color: #8a90a8; font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; white-space: pre-line; }
   .item { display: flex; align-items: center; gap: 10px; background: #1d2240; border-radius: 12px; padding: 10px; margin-bottom: 8px; }
   .item .dot { width: 22px; height: 22px; border-radius: 50%; flex: none; border: 2px solid rgba(255,255,255,.3); }
   .item .nm { flex: 1; min-width: 0; }
@@ -62,6 +62,10 @@
   .tag.p { background: #5d4a1a; color: #ffe082; }
   .tag.m { background: #3f2366; color: #d59bff; }
   video { width: 100%; max-height: 52dvh; background: #000; border-radius: 12px; }
+  .aibox { background: linear-gradient(135deg, #1f2550, #2a1f4f); border: 1px solid #4b3f8f; border-radius: 14px; padding: 10px; margin: 10px 0; }
+  .aibox .row { margin: 6px 0 0; }
+  .aibox input[type=text], .aibox textarea { width: 100%; }
+  button.ai { background: linear-gradient(135deg, #7c4dff, #448aff); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -99,6 +103,13 @@
       <label class="frow wide"><span>자동 녹화</span><input type="checkbox" id="autoRec" checked style="width:22px;height:22px"></label>
       <button id="start" class="primary">▶ 전투 시작</button>
       <p class="hint" id="recSupport"></p>
+      <div class="aibox">
+        <b>🤖 AI 자동 대결</b>
+        <input type="text" id="aiDuelTheme" placeholder="테마 (예: 불 vs 얼음, 기사단 vs 마왕군) · 비우면 AI 마음대로" style="margin-top:6px">
+        <div class="row"><button id="aiDuel" class="ai">🤖 AI가 캐릭터 2명 만들어서 바로 대결</button></div>
+      </div>
+      <h3>🤖 AI 설정</h3>
+      <div id="aiSettings"></div>
       <h3>💾 데이터 (캐릭터 · VFX)</h3>
       <div class="row">
         <button id="exportBtn">📤 내보내기</button>
@@ -112,10 +123,16 @@
     <section id="tab-chars" hidden>
       <div id="charListView">
         <button id="newChar" class="primary">＋ 새 캐릭터 만들기</button>
+        <div class="aibox">
+          <textarea id="aiCharPrompt" rows="2" placeholder="예: 불꽃 검사, 빠르고 공격적 / 얼음 마녀, 느리지만 범위 마법&#10;비워두면 AI가 알아서 만들어요"></textarea>
+          <div class="row"><button id="aiCharBtn" class="ai">🤖 AI로 캐릭터 만들기 (VFX·대사 포함)</button></div>
+        </div>
         <div id="charList" style="margin-top:12px"></div>
       </div>
       <div id="charEditView" hidden>
         <div class="pv"><canvas id="charPv" width="660" height="660"></canvas><div class="cap">허수아비 상대로 미리보기 · 값을 바꾸면 바로 반영</div></div>
+        <div class="aibox"><input type="text" id="aiCharEdit" placeholder="AI에게 수정 요청 (예: 더 빠르게, 독 속성으로 바꿔줘)">
+          <div class="row"><button id="aiCharEditBtn" class="ai">🤖 AI로 수정</button></div></div>
         <div id="charForm"></div>
         <div class="row" style="position:sticky;bottom:-16px;background:#161a2e;padding:10px 0;margin-bottom:0">
           <button id="charCancel">취소</button>
@@ -128,11 +145,17 @@
     <section id="tab-vfx" hidden>
       <div id="vfxListView">
         <button id="newVfx" class="primary">＋ 새 VFX 만들기</button>
+        <div class="aibox">
+          <textarea id="aiVfxPrompt" rows="2" placeholder="예: 보라색 번개 폭발 / 벚꽃잎이 흩날리는 타격&#10;비워두면 AI가 알아서 만들어요"></textarea>
+          <div class="row"><button id="aiVfxBtn" class="ai">🤖 AI로 VFX 만들기</button></div>
+        </div>
         <div id="vfxList" style="margin-top:12px"></div>
         <p class="hint">만든 VFX는 캐릭터 편집의 'VFX' 항목에서 타격 / 발사 / 꼬리 / 사망 이펙트로 고를 수 있어요.</p>
       </div>
       <div id="vfxEditView" hidden>
         <div class="pv"><canvas id="vfxPv" width="660" height="440"></canvas><div class="cap">화면을 탭하면 그 위치에서 재생</div></div>
+        <div class="aibox"><input type="text" id="aiVfxEdit" placeholder="AI에게 수정 요청 (예: 더 크고 화려하게, 파란색으로)">
+          <div class="row"><button id="aiVfxEditBtn" class="ai">🤖 AI로 수정</button></div></div>
         <div id="vfxForm"></div>
         <div class="row" style="position:sticky;bottom:-16px;background:#161a2e;padding:10px 0;margin-bottom:0">
           <button id="vfxCancel">취소</button>
@@ -1191,7 +1214,7 @@ function buildForm(box, obj, schema, onChange) {
     } else {
       inp = document.createElement('input'); inp.type = fd.type;
       if (fd.type === 'range') { inp.min = fd.min; inp.max = fd.max; inp.step = fd.step || 1; }
-      if (fd.type === 'text') { inp.maxLength = fd.max || 20; inp.placeholder = fd.ph || ''; }
+      if (fd.type === 'text' || fd.type === 'password') { inp.maxLength = fd.max || 20; inp.placeholder = fd.ph || ''; inp.autocomplete = 'off'; }
       inp.value = val;
     }
     row.appendChild(inp);
@@ -1429,9 +1452,9 @@ function renderCharList() {
   }
 }
 function rebuildCharPv() { charPv = new Engine([editChar, DUMMY], { preview: true, mute: true }); }
-function openCharEditor(id) {
+function openCharEditor(id, preset) {
   editCharIsNew = !id;
-  editChar = id ? normChar(clone(chars.find(c => c.id === id))) : charTemplate();
+  editChar = preset ? preset : id ? normChar(clone(chars.find(c => c.id === id))) : charTemplate();
   $('#charListView').hidden = true; $('#charEditView').hidden = false;
   buildForm($('#charForm'), editChar, CHAR_SCHEMA, () => { charPvDirty = 12; });
   rebuildCharPv();
@@ -1470,9 +1493,9 @@ function renderVfxList() {
     box.appendChild(it);
   }
 }
-function openVfxEditor(id) {
+function openVfxEditor(id, preset) {
   editVfxIsNew = !id;
-  editVfx = id ? normVfx(clone(vfxById(id))) : vfxTemplate();
+  editVfx = preset ? preset : id ? normVfx(clone(vfxById(id))) : vfxTemplate();
   $('#vfxListView').hidden = true; $('#vfxEditView').hidden = false;
   vfxPvLayer = new FxLayer(); vfxPvT = 60;
   buildForm($('#vfxForm'), editVfx, VFX_SCHEMA, fd => { if (fd.key === 'sound') { ensureAudio(); sfx(editVfx.sound === 'auto' ? 'hit' : editVfx.sound); } vfxPvT = Math.max(vfxPvT, 55); });
@@ -1494,6 +1517,169 @@ $('#vfxPv').addEventListener('pointerdown', e => {
   vfxPvLayer.spawn(editVfx, (e.clientX - r.left) / r.width * 660, (e.clientY - r.top) / r.height * 440, -Math.PI / 2, { sound: 'hit' });
   vfxPvT = 0;
 });
+
+// =====================================================================
+// 🤖 AI 생성 (키는 이 기기 localStorage에만 저장, 브라우저에서 직접 호출)
+// =====================================================================
+let aiCfg = { provider: 'auto', key: '', baseUrl: 'https://api.openai.com/v1', model: '' };
+try { Object.assign(aiCfg, JSON.parse(localStorage.getItem('bf_ai') || '{}')); } catch (e) {}
+const saveAi = () => { try { localStorage.setItem('bf_ai', JSON.stringify(aiCfg)); } catch (e) {} };
+const aiProvider = () => aiCfg.provider !== 'auto' ? aiCfg.provider : (aiCfg.key.trim().startsWith('sk-ant-') ? 'anthropic' : 'openai');
+const aiModel = () => (aiCfg.model || '').trim() || (aiProvider() === 'anthropic' ? 'claude-opus-5-5' : 'gpt-4o-mini');
+const CLAUDE_FALLBACK_MODELS = ['claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5-5'];
+
+async function callAI(system, user) {
+  const key = aiCfg.key.trim();
+  if (!key) throw new Error('API 키가 없어요.\n⚔️ 전투 탭 아래 [🤖 AI 설정]에 키를 넣어주세요.');
+  let r, j;
+  try {
+    if (aiProvider() === 'anthropic') {
+      const model = aiModel(), body = { model, max_tokens: 16000, output_config: { effort: 'low' }, system, messages: [{ role: 'user', content: user }] };
+      const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2026-10-21', 'anthropic-dangerous-direct-browser-access': 'true' };
+      if (CLAUDE_FALLBACK_MODELS.includes(model)) { headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; body.fallbacks = 'default'; }
+      r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
+      j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
+      if (j.stop_reason === 'refusal') throw new Error('AI가 이 요청을 거절했어요. 표현을 바꿔서 다시 시도해 보세요.');
+      return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    }
+    const url = (aiCfg.baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '') + '/chat/completions';
+    const body = { model: aiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], response_format: { type: 'json_object' } };
+    const send = () => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
+    r = await send();
+    if (r.status === 400) { delete body.response_format; r = await send(); }   // JSON 모드 미지원 서버 대비
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + r.status);
+    return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+  } catch (e) {
+    if (e instanceof TypeError) throw new Error('AI 서버에 연결할 수 없어요 (인터넷 / API 주소 / 키 종류를 확인하세요).\n' + e.message);
+    throw e;
+  }
+}
+function parseJSON(t) {
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a < 0 || b < a) throw new Error('AI 응답에서 JSON을 찾지 못했어요. 다시 시도해 주세요.');
+  return JSON.parse(t.slice(a, b + 1));
+}
+const AI_SKIP = new Set(['image', 'imgZoom', 'imgX', 'imgY', 'hpShow', 'hitVfx', 'castVfx', 'trailVfx', 'deathVfx']);
+function schemaSpec(schema, sample) {
+  return schema.filter(f => f.key && !AI_SKIP.has(f.key)).map(f => {
+    const lab = typeof f.label === 'function' ? f.label(sample) : f.label;
+    let t;
+    if (f.key === 'style') t = 'physical이면 melee(근접무기)|ranged(원거리 화살)|body(몸통박치기), magic이면 bolt(마법탄)|nova(범위 파동)|orbit(회전 구체)';
+    else if (f.type === 'range') t = `숫자 ${f.min}~${f.max}`;
+    else if (f.type === 'select') t = (typeof f.options === 'function' ? f.options(sample) : f.options).map(o => `${o[0]}(${o[1]})`).join('|');
+    else if (f.type === 'color') t = '"#rrggbb"';
+    else if (f.type === 'check') t = 'true/false';
+    else if (f.type === 'textarea') t = '문자열, 대사 여러 개는 \\n 으로 구분';
+    else t = `문자열 최대 ${f.max || 20}자`;
+    return `- ${f.key}: ${lab} — ${t}`;
+  }).join('\n');
+}
+function sanitize(src, schema, out) {
+  for (const f of schema) {
+    if (!f.key || AI_SKIP.has(f.key)) continue;
+    let v = getP(src, f.key);
+    if (v === undefined || v === null) continue;
+    if (f.type === 'range') { const n = +v, st = f.step || 1; if (isFinite(n)) setP(out, f.key, +clamp(Math.round(n / st) * st, f.min, f.max).toFixed(3)); }
+    else if (f.type === 'color') { if (/^#[0-9a-f]{6}$/i.test(v)) setP(out, f.key, v.toLowerCase()); }
+    else if (f.type === 'check') setP(out, f.key, !!v);
+    else if (f.type === 'select') { const opts = typeof f.options === 'function' ? f.options(out) : f.options; if (opts.some(o => o[0] === v)) setP(out, f.key, v); }
+    else { if (Array.isArray(v)) v = v.join('\n'); if (typeof v === 'string') setP(out, f.key, f.type === 'textarea' ? v.slice(0, 300) : v.slice(0, f.max || 20)); }
+  }
+  return out;
+}
+const AI_SYS = '너는 2D "볼 전투" 시뮬레이션 게임의 디자이너다. 공들이 660x660 경기장에서 튕겨다니며 무기/마법으로 싸운다(60fps, 볼 반지름 기본 44, 이동속도 기본 7.5). ' +
+  '반드시 JSON 객체 하나만 출력하고, 설명이나 코드블록 표시는 쓰지 마라. 이름과 대사는 한국어로.';
+function vfxPrompt() {
+  return `VFX(파티클 이펙트) 객체의 필드:\n${schemaSpec(VFX_SCHEMA, vfxTemplate())}\n` +
+    '요청의 분위기에 맞게 색(color1→color2), 모양, 개수, 속도, 고리/번쩍/흔들림, 소리를 창의적으로 정해라. 너무 과하지 않게(count 10~60, shake 0~12 권장).';
+}
+function charPrompt(withVfx) {
+  return `캐릭터 객체의 필드:\n${schemaSpec(CHAR_SCHEMA, charTemplate())}\n` +
+    '규칙: lines는 객체 {"start","hit","hurt","win","death"}이고 각 값은 \\n으로 구분한 짧은 한국어 대사 2~3개. 콘셉트에 맞는 attackType/style/무기/색을 고르고, ' +
+    '밸런스는 무난하게(hp 80~160, damage 1~6, 성장량 0.5~2 정도). fxColor는 무기나 마법 색.\n' +
+    (withVfx ? `출력 형식: {"character": 캐릭터, "vfx": {"hit": VFX, "cast": VFX 또는 null, "trail": VFX 또는 null, "death": VFX}}\n` +
+      'cast는 ranged/bolt/nova일 때, trail은 ranged/bolt/orbit일 때만. VFX 객체의 필드:\n' + schemaSpec(VFX_SCHEMA, vfxTemplate())
+      : '출력 형식: {"character": 캐릭터}');
+}
+async function aiMakeVfx(req, current) {
+  const user = (req.trim() || '아무 콘셉트나 창의적으로 골라서 멋진 타격 이펙트를 만들어줘') +
+    (current ? '\n\n현재 VFX(이걸 바탕으로 요청대로 수정):\n' + JSON.stringify(clone(current)) : '');
+  const res = parseJSON(await callAI(AI_SYS + '\n\n' + vfxPrompt(), user));
+  const v = sanitize(res.vfx || res, VFX_SCHEMA, current ? normVfx(clone(current)) : vfxTemplate());
+  if (current) v.id = current.id;
+  return v;
+}
+async function aiMakeChar(req, current) {
+  const base = current ? normChar(clone(current)) : charTemplate();
+  const cur = current ? clone(current) : null;
+  if (cur) { for (const k of AI_SKIP) delete cur[k]; delete cur.id; }
+  const user = (req.trim() || '아무 콘셉트나 창의적으로 골라서 개성 있는 캐릭터를 만들어줘') +
+    (cur ? '\n\n현재 캐릭터(이걸 바탕으로 요청대로 수정, 바꿀 필요 없는 값은 그대로):\n' + JSON.stringify(cur) : '');
+  const res = parseJSON(await callAI(AI_SYS + '\n\n' + charPrompt(!current), user));
+  const c = sanitize(res.character || res, CHAR_SCHEMA, base);
+  if (current) { c.id = current.id; return c; }
+  const fx = res.vfx || {}, names = { hit: '타격', cast: '발사', trail: '꼬리', death: '사망' };
+  for (const [k, field] of [['hit', 'hitVfx'], ['cast', 'castVfx'], ['trail', 'trailVfx'], ['death', 'deathVfx']]) {
+    if (!fx[k] || typeof fx[k] !== 'object') continue;
+    const nv = sanitize(fx[k], VFX_SCHEMA, vfxTemplate());
+    nv.id = uidStr('v'); nv.name = (c.name + ' ' + names[k]).slice(0, 16);
+    vfxs.push(nv); c[field] = nv.id;
+  }
+  saveStore();
+  return c;
+}
+async function aiRun(btn, fn) {
+  if (btn.disabled) return;
+  const label = btn.textContent; btn.disabled = true; btn.textContent = '⏳ AI가 만드는 중…';
+  try { await fn(); } catch (e) { alert('AI 생성 실패: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
+const AI_SCHEMA = [
+  { key: 'provider', label: 'AI 종류', type: 'select', rebuild: true, options: [['auto', '자동 (키 모양으로 판단)'], ['openai', 'OpenAI 호환'], ['anthropic', 'Claude (Anthropic)']] },
+  { key: 'key', label: 'API 키', type: 'password', max: 300, ph: 'sk-...' },
+  { key: 'baseUrl', label: 'API 주소', type: 'text', max: 200, show: () => aiProvider() === 'openai' },
+  { key: 'model', label: '모델', type: 'text', max: 80, ph: '비우면 기본 모델' },
+  { type: 'hint', text: () => `→ ${aiProvider() === 'anthropic' ? 'Claude' : 'OpenAI 호환'} · 모델 ${aiModel()}${aiCfg.key.trim() ? ' · 키 입력됨 ✅' : ' · 키 없음'}\n키는 이 기기 브라우저에만 저장되고 AI 서버로만 전송돼요. 키를 남에게 공유하지 마세요.` },
+];
+buildForm($('#aiSettings'), aiCfg, AI_SCHEMA, saveAi);
+
+$('#aiVfxBtn').onclick = e => aiRun(e.currentTarget, async () => {
+  const v = await aiMakeVfx($('#aiVfxPrompt').value);
+  $('#aiVfxPrompt').value = '';
+  openVfxEditor(null, v);
+});
+$('#aiVfxEditBtn').onclick = e => aiRun(e.currentTarget, async () => {
+  if (!$('#aiVfxEdit').value.trim()) throw new Error('수정 요청을 입력해 주세요.');
+  const v = await aiMakeVfx($('#aiVfxEdit').value, editVfx);
+  Object.assign(editVfx, v); $('#aiVfxEdit').value = '';
+  buildForm($('#vfxForm'), editVfx, VFX_SCHEMA, () => { vfxPvT = Math.max(vfxPvT, 55); });
+  vfxPvT = 70;
+});
+$('#aiCharBtn').onclick = e => aiRun(e.currentTarget, async () => {
+  const c = await aiMakeChar($('#aiCharPrompt').value);
+  $('#aiCharPrompt').value = '';
+  openCharEditor(null, c);
+});
+$('#aiCharEditBtn').onclick = e => aiRun(e.currentTarget, async () => {
+  if (!$('#aiCharEdit').value.trim()) throw new Error('수정 요청을 입력해 주세요.');
+  const c = await aiMakeChar($('#aiCharEdit').value, editChar);
+  Object.assign(editChar, c); $('#aiCharEdit').value = '';
+  buildForm($('#charForm'), editChar, CHAR_SCHEMA, () => { charPvDirty = 12; });
+  rebuildCharPv();
+});
+$('#aiDuel').onclick = e => { ensureAudio(); aiRun(e.currentTarget, async () => {
+  const theme = $('#aiDuelTheme').value.trim();
+  const reqs = theme
+    ? [`테마 "${theme}"의 첫 번째 진영 캐릭터`, `테마 "${theme}"의 두 번째 진영 캐릭터 (첫 번째와 대비되는 콘셉트)`]
+    : ['물리 공격(attackType physical) 캐릭터를 자유 콘셉트로', '마법 공격(attackType magic) 캐릭터를 자유 콘셉트로'];
+  const made = await Promise.all(reqs.map(q => aiMakeChar(q)));
+  for (const c of made) { c.id = uidStr('c'); chars.push(c); }
+  saveStore(); renderCharList();
+  config.slots = made.map(c => c.id); renderSlots();
+  startBattle();
+}); };
 
 // =====================================================================
 // 시작
